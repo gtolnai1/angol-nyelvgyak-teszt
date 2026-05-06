@@ -56,20 +56,28 @@
     <!-- 2. CHAT KÉPERNYŐ -->
     <div id="chatScreen" class="hidden flex-1 flex flex-col h-full">
         <!-- Fejléc -->
-        <header class="bg-white shadow-sm py-4 px-6 flex justify-between items-center z-10 flex-shrink-0">
-            <div class="flex items-center gap-3">
+        <header class="bg-white shadow-sm py-3 px-4 sm:px-6 flex justify-between items-center z-10 flex-shrink-0">
+            <div class="flex items-center gap-2 sm:gap-3">
                 <i class="fa-solid fa-robot text-blue-600 text-2xl"></i>
-                <h1 class="text-xl font-bold text-slate-800">Beszélgetés</h1>
+                <h1 class="text-lg sm:text-xl font-bold text-slate-800">Beszélgetés</h1>
             </div>
-            <button 
-                onclick="endConversation()"
-                id="endButton"
-                class="bg-red-50 hover:bg-red-100 text-red-600 font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors"
-            >
-                <i class="fa-solid fa-stop-circle"></i>
-                <span class="hidden sm:inline">Beszélgetés vége & Értékelés</span>
-                <span class="sm:hidden">Befejezés</span>
-            </button>
+            
+            <!-- ÚJ: Jobb oldali menü a Modell választóval és az Értékelés gombbal -->
+            <div class="flex items-center gap-2 sm:gap-4">
+                <select id="modelSelect" class="bg-slate-50 border border-slate-200 text-slate-600 text-xs sm:text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2 transition-colors cursor-pointer max-w-[110px] sm:max-w-[180px] truncate" title="Modell váltása hiba esetén">
+                    <!-- Dinamikusan töltődik -->
+                </select>
+                
+                <button 
+                    onclick="endConversation()"
+                    id="endButton"
+                    class="bg-red-50 hover:bg-red-100 text-red-600 font-medium py-2 px-3 sm:px-4 rounded-lg flex items-center gap-2 transition-colors"
+                    title="Beszélgetés lezárása és értékelés"
+                >
+                    <i class="fa-solid fa-stop-circle"></i>
+                    <span class="hidden sm:inline">Értékelés</span>
+                </button>
+            </div>
         </header>
 
         <!-- Üzenetek -->
@@ -141,35 +149,32 @@
 
     <!-- JAVASCRIPT LOGIKA -->
     <script>
-        let API_MODEL = ''; // Dinamikusan fogjuk beállítani!
+        let API_MODEL = ''; 
         let apiKey = '';
         let conversation = [];
         let recognition = null;
         let isListening = false;
 
-        // --- ÚJ: Automatikus újrapróbálkozó funkció (Exponential Backoff) ---
+        // Automatikus újrapróbálkozó funkció (Exponential Backoff)
         async function fetchWithRetry(url, options) {
-            const delays = [1000, 2000, 4000, 8000, 16000]; // Várakozási idők millimásodpercben
-            for (let i = 0; i < 6; i++) { // 1 eredeti próbálkozás + 5 újrapróbálkozás
+            const delays = [1000, 2000, 4000, 8000, 16000]; 
+            for (let i = 0; i < 6; i++) { 
                 try {
                     const response = await fetch(url, options);
                     const data = await response.json();
                     
                     if (data.error) {
                         const msg = data.error.message.toLowerCase();
-                        // Ha a Google szervere túlterhelt, eldobjuk, hogy a catch ág újra próbálja
                         if (msg.includes('high demand') || msg.includes('quota') || msg.includes('429') || msg.includes('503') || msg.includes('overloaded')) {
                             throw new Error(data.error.message);
                         }
-                        return data; // Egyéb hiba (pl. rossz API kulcs) esetén azonnal visszatérünk vele
+                        return data; 
                     }
-                    return data; // Siker!
+                    return data; 
                 } catch (error) {
                     if (i === 5) {
-                        // Ha mind az 5 újrapróbálkozás elbukott
-                        return { error: { message: "A szerver jelenleg extrém módon túlterhelt. Kérlek, várj egy percet és próbáld újra!" } };
+                        return { error: { message: "A szerver tartósan túlterhelt. Kérlek, válassz egy másik modellt a fenti menüből (pl. Flash-8B)!" } };
                     }
-                    // Csendes várakozás a következő próbálkozásig
                     await new Promise(resolve => setTimeout(resolve, delays[i]));
                 }
             }
@@ -191,42 +196,67 @@
             const startBtn = document.getElementById('startBtn');
             
             if(apiKey.length > 10) {
-                // Töltés animáció a gombon
                 const originalText = startBtn.innerHTML;
                 startBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ellenőrzés...';
                 startBtn.disabled = true;
 
                 try {
-                    // Lekérdezzük a Google-től, hogy a te kulcsoddal MILYEN modellek érhetők el (Újrapróbálkozással)
                     const data = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
 
                     if(data.error) throw new Error(data.error.message);
 
                     if(data.models && data.models.length > 0) {
-                        // Kiszűrjük azokat, amik tudnak szöveget generálni
                         const validModels = data.models.filter(m => 
                             m.supportedGenerationMethods && 
                             m.supportedGenerationMethods.includes('generateContent') &&
                             m.name.includes('gemini')
                         );
 
-                        // Megkeressük a legjobbat a listából (Flash -> Pro -> Bármi)
-                        let selected = validModels.find(m => m.name === 'models/gemini-1.5-flash') ||
+                        // Kiemelten keressük a 8B-t, mert az a leggyorsabb és legkevésbé terhelt
+                        let selected = validModels.find(m => m.name === 'models/gemini-1.5-flash-8b') ||
+                                       validModels.find(m => m.name === 'models/gemini-2.0-flash') ||
+                                       validModels.find(m => m.name === 'models/gemini-1.5-flash') ||
                                        validModels.find(m => m.name === 'models/gemini-1.5-pro') ||
-                                       validModels.find(m => m.name.includes('flash')) ||
-                                       validModels.find(m => m.name === 'models/gemini-pro') ||
                                        validModels[0];
 
                         if(selected) {
-                            // Levágjuk a "models/" előtagot a névről
                             API_MODEL = selected.name.replace('models/', '');
-                            console.log("Sikeresen kiválasztott modell:", API_MODEL);
+                            console.log("Alapértelmezett modell:", API_MODEL);
+
+                            // Modellválasztó (Dropdown) feltöltése
+                            const modelSelect = document.getElementById('modelSelect');
+                            modelSelect.innerHTML = '';
+                            
+                            validModels.forEach(m => {
+                                const val = m.name.replace('models/', '');
+                                const option = document.createElement('option');
+                                option.value = val;
+                                
+                                // Felhasználóbarát nevek a legördülőben
+                                let displayName = val;
+                                if(val.includes('flash-8b')) displayName = '⚡ Gyors (8B)';
+                                else if(val.includes('2.0-flash')) displayName = '✨ Új (2.0)';
+                                else if(val.includes('pro')) displayName = '🧠 Okos (Pro)';
+                                else if(val.includes('flash')) displayName = '🚀 Normál (Flash)';
+
+                                option.text = displayName;
+                                modelSelect.appendChild(option);
+                            });
+
+                            // Beállítjuk a dropdown értékét az aktuálisra
+                            modelSelect.value = API_MODEL;
+                            
+                            // Figyeljük, ha a diák/tanár modellt vált
+                            modelSelect.addEventListener('change', (e) => {
+                                API_MODEL = e.target.value;
+                                console.log("Modell átállítva erre:", API_MODEL);
+                            });
+
                         } else {
                             throw new Error("A kulcsodhoz nincs engedélyezve megfelelő nyelvi modell.");
                         }
                     }
 
-                    // Minden sikeres, indulhat a chat!
                     showScreen('chatScreen');
                     const introText = "Hello! I'm your English practice partner. What would you like to talk about today?";
                     addMessageToUI('model', introText);
@@ -235,7 +265,6 @@
                 } catch(error) {
                     alert("Hiba történt a kulcs ellenőrzésekor:\n" + error.message);
                 } finally {
-                    // Gomb visszaállítása
                     startBtn.innerHTML = originalText;
                     startBtn.disabled = false;
                 }
@@ -383,7 +412,6 @@
             const systemInstruction = "You are a friendly English teacher having a casual spoken conversation with a student. Keep your answers short (1-3 sentences maximum) so it feels like a real chat. Use conversational English. DO NOT explicitly correct the student's grammar during this chat, just respond naturally to what they say. Your goal is to keep them talking.";
 
             try {
-                // ITT MÁR A BIZTOSAN MŰKÖDŐ, AUTOMATIKUSAN KERESETT MODELLT HASZNÁLJUK, ÉS ÚJRAPRÓBÁLKOZUNK HA ZSÚFOLT A SZERVER!
                 const data = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
