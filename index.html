@@ -320,7 +320,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        contents: formattedHistory,
+                        contents: historyForApi,
                         systemInstruction: { parts: [{ text: systemInstruction }] }
                     })
                 });
