@@ -326,7 +326,16 @@
                 });
 
                 const data = await response.json();
-                if(data.error) throw new Error(data.error.message);
+                
+                // Ha a Google szervere hibát küld
+                if(data.error) {
+                    throw new Error(data.error.message);
+                }
+
+                // Ha a biztonsági szűrő blokkolja a választ
+                if(!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+                    throw new Error("A Google biztonsági szűrője blokkolta a választ.");
+                }
 
                 const aiText = data.candidates[0].content.parts[0].text;
                 document.getElementById('typingIndicator').classList.add('hidden');
@@ -336,9 +345,10 @@
             } catch(error) {
                 console.error("API Hiba:", error);
                 document.getElementById('typingIndicator').classList.add('hidden');
-                const errorMsg = "Sorry, I had trouble understanding that. Could you repeat?";
+                
+                // MOST KIÍRJUK A NYERS HIBÁT A KÉPERNYŐRE
+                const errorMsg = "Rendszerhiba: " + error.message;
                 addMessageToUI('model', errorMsg);
-                speakText(errorMsg);
             }
         }
 
