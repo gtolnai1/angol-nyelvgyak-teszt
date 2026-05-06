@@ -43,8 +43,9 @@
                     required
                 />
                 <button 
+                    id="startBtn"
                     type="submit"
-                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors flex justify-center items-center gap-2"
                 >
                     Kezdődhet a gyakorlás!
                 </button>
@@ -140,13 +141,12 @@
 
     <!-- JAVASCRIPT LOGIKA -->
     <script>
-        const API_MODEL = 'gemini-1.5-flash-latest';
+        let API_MODEL = ''; // Dinamikusan fogjuk beállítani!
         let apiKey = '';
         let conversation = [];
         let recognition = null;
         let isListening = false;
 
-        // Képernyőváltás logikája
         function showScreen(screenId) {
             document.getElementById('configScreen').classList.add('hidden');
             document.getElementById('chatScreen').classList.add('hidden');
@@ -156,15 +156,62 @@
             document.getElementById(screenId).classList.add('flex');
         }
 
-        // Kezdés gomb
-        document.getElementById('configForm').addEventListener('submit', (e) => {
+        // Kezdés gomb és automatikus modell-kereső
+        document.getElementById('configForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             apiKey = document.getElementById('apiKeyInput').value.trim();
+            const startBtn = document.getElementById('startBtn');
+            
             if(apiKey.length > 10) {
-                showScreen('chatScreen');
-                const introText = "Hello! I'm your English practice partner. What would you like to talk about today?";
-                addMessageToUI('model', introText);
-                speakText(introText);
+                // Töltés animáció a gombon
+                const originalText = startBtn.innerHTML;
+                startBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ellenőrzés...';
+                startBtn.disabled = true;
+
+                try {
+                    // Lekérdezzük a Google-től, hogy a te kulcsoddal MILYEN modellek érhetők el
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+                    const data = await response.json();
+
+                    if(data.error) throw new Error(data.error.message);
+
+                    if(data.models && data.models.length > 0) {
+                        // Kiszűrjük azokat, amik tudnak szöveget generálni
+                        const validModels = data.models.filter(m => 
+                            m.supportedGenerationMethods && 
+                            m.supportedGenerationMethods.includes('generateContent') &&
+                            m.name.includes('gemini')
+                        );
+
+                        // Megkeressük a legjobbat a listából (Flash -> Pro -> Bármi)
+                        let selected = validModels.find(m => m.name === 'models/gemini-1.5-flash') ||
+                                       validModels.find(m => m.name === 'models/gemini-1.5-pro') ||
+                                       validModels.find(m => m.name.includes('flash')) ||
+                                       validModels.find(m => m.name === 'models/gemini-pro') ||
+                                       validModels[0];
+
+                        if(selected) {
+                            // Levágjuk a "models/" előtagot a névről
+                            API_MODEL = selected.name.replace('models/', '');
+                            console.log("Sikeresen kiválasztott modell:", API_MODEL);
+                        } else {
+                            throw new Error("A kulcsodhoz nincs engedélyezve megfelelő nyelvi modell.");
+                        }
+                    }
+
+                    // Minden sikeres, indulhat a chat!
+                    showScreen('chatScreen');
+                    const introText = "Hello! I'm your English practice partner. What would you like to talk about today?";
+                    addMessageToUI('model', introText);
+                    speakText(introText);
+
+                } catch(error) {
+                    alert("Hiba történt a kulcs ellenőrzésekor:\n" + error.message);
+                } finally {
+                    // Gomb visszaállítása
+                    startBtn.innerHTML = originalText;
+                    startBtn.disabled = false;
+                }
             }
         });
 
@@ -187,8 +234,6 @@
             recognition.onend = () => {
                 isListening = false;
                 updateMicUI();
-                
-                // ÚJ: Automatikus küldés, ha befejezted a beszédet és van felismert szöveg
                 if (document.getElementById('messageInput').value.trim() !== '') {
                     sendMessage();
                 }
@@ -207,7 +252,6 @@
 
         function toggleListen() {
             if(!recognition) return;
-            
             if(isListening) {
                 recognition.stop();
             } else {
@@ -235,7 +279,6 @@
             }
         }
 
-        // Enter gomb lekezelése a beviteli mezőn
         document.getElementById('messageInput').addEventListener('keypress', function(e) {
             if(e.key === 'Enter') {
                 e.preventDefault();
@@ -278,7 +321,6 @@
             msgDiv.appendChild(innerDiv);
             chatBox.appendChild(msgDiv);
             
-            // Görgetés az aljára
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
@@ -288,15 +330,14 @@
             if(!text) return;
 
             input.value = '';
-            if(isListening) toggleListen(); // Kikapcsoljuk a mikrofont küldéskor
+            if(isListening) toggleListen();
 
             addMessageToUI('user', text);
             document.getElementById('typingIndicator').classList.remove('hidden');
             document.getElementById('chatBox').scrollTop = document.getElementById('chatBox').scrollHeight;
 
-            // ÚJ: Szigorú ellenőrzés a Gemini API-hoz (váltakozó user/model szerepek biztosítása)
             let historyForApi = [];
-            let expectedRole = 'user'; // Visszafelé építkezünk, a legutolsó üzenet biztosan 'user'
+            let expectedRole = 'user';
             
             for (let i = conversation.length - 1; i >= 0; i--) {
                 if (conversation[i].role === expectedRole) {
@@ -308,7 +349,6 @@
                 }
             }
             
-            // Ha véletlenül 'model' üzenettel kezdődne a lista, azt eltávolítjuk
             if (historyForApi.length > 0 && historyForApi[0].role === 'model') {
                 historyForApi.shift();
             }
@@ -316,7 +356,8 @@
             const systemInstruction = "You are a friendly English teacher having a casual spoken conversation with a student. Keep your answers short (1-3 sentences maximum) so it feels like a real chat. Use conversational English. DO NOT explicitly correct the student's grammar during this chat, just respond naturally to what they say. Your goal is to keep them talking.";
 
             try {
-                let response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`, {
+                // ITT MÁR A BIZTOSAN MŰKÖDŐ, AUTOMATIKUSAN KERESETT MODELLT HASZNÁLJUK!
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -325,31 +366,10 @@
                     })
                 });
 
-                let data = await response.json();
+                const data = await response.json();
                 
-                // ÚJ BIZTONSÁGI HÁLÓ: Ha az alap modell nem elérhető, próbáljuk meg a Pro verzióval
-                if(data.error && (data.error.message.includes('not found') || data.error.message.includes('not supported'))) {
-                    console.log("Flash modell nem elérhető, váltás a Gemini 1.5 Pro-ra...");
-                    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: historyForApi,
-                            systemInstruction: { parts: [{ text: systemInstruction }] }
-                        })
-                    });
-                    data = await response.json();
-                }
-
-                // Ha a Google szervere hibát küld
-                if(data.error) {
-                    throw new Error(data.error.message);
-                }
-
-                // Ha a biztonsági szűrő blokkolja a választ
-                if(!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-                    throw new Error("A Google biztonsági szűrője blokkolta a választ.");
-                }
+                if(data.error) throw new Error(data.error.message);
+                if(!data.candidates || !data.candidates[0] || !data.candidates[0].content) throw new Error("A Google biztonsági szűrője blokkolta a választ.");
 
                 const aiText = data.candidates[0].content.parts[0].text;
                 document.getElementById('typingIndicator').classList.add('hidden');
@@ -359,10 +379,7 @@
             } catch(error) {
                 console.error("API Hiba:", error);
                 document.getElementById('typingIndicator').classList.add('hidden');
-                
-                // MOST KIÍRJUK A NYERS HIBÁT A KÉPERNYŐRE
-                const errorMsg = "Rendszerhiba: " + error.message;
-                addMessageToUI('model', errorMsg);
+                addMessageToUI('model', "Rendszerhiba: " + error.message);
             }
         }
 
@@ -399,7 +416,7 @@
             const prompt = `Itt egy angol nyelvű beszélgetés egy diák és egy tanár között:\n\n${chatLog}\n\nKérlek, vizsgáld meg a diák ("Student") mondatait. Írj egy barátságos, bátorító értékelést MAGYAR nyelven az alábbi struktúrában:\n1. Rövid dicséret (mi ment jól).\n2. Nyelvtani és szókincsbeli hibák javítása (idézd az eredeti mondatot, és mutasd meg a helyeset).\n3. 1-2 hasznos tipp a fejlődéshez.\n\nVálaszolj formázott Markdown szöveggel.`;
 
             try {
-                let response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`, {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -407,24 +424,10 @@
                     })
                 });
                 
-                let data = await response.json();
-
-                // ÚJ BIZTONSÁGI HÁLÓ: Értékelésnél is váltunk, ha kell
-                if(data.error && (data.error.message.includes('not found') || data.error.message.includes('not supported'))) {
-                    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: prompt }] }]
-                        })
-                    });
-                    data = await response.json();
-                }
-
+                const data = await response.json();
                 if(data.error) throw new Error(data.error.message);
 
                 const feedbackText = data.candidates[0].content.parts[0].text;
-                // Markdown szöveg átalakítása HTML-re a marked.js segítségével
                 document.getElementById('feedbackContent').innerHTML = marked.parse(feedbackText);
                 
             } catch(error) {
@@ -432,7 +435,7 @@
                 document.getElementById('feedbackContent').innerHTML = `
                     <div class="bg-red-50 text-red-600 p-4 rounded-lg">
                         <p class="font-bold"><i class="fa-solid fa-triangle-exclamation"></i> Hiba történt</p>
-                        <p>Sajnos nem sikerült elkészíteni az értékelést. Kérlek ellenőrizd az internetkapcsolatot.</p>
+                        <p>Sajnos nem sikerült elkészíteni az értékelést. Részletek: ${error.message}</p>
                     </div>`;
             }
         }
@@ -446,7 +449,6 @@
             speakText(introText);
         }
 
-        // Böngésző hangjainak betöltése (kell a pontos akcentushoz)
         if ('speechSynthesis' in window) {
             window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
         }
